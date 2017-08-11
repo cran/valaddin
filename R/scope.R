@@ -65,37 +65,7 @@
 NULL
 
 is_check_maker <- function(x) {
-  purrr::is_function(x) && inherits(x, "check_maker")
-}
-
-localize_ <- function(chk) {
-  .msg <- ff_eval_lhs(chk)
-  .rhs <- lazyeval::f_rhs(chk)
-  .env <- lazyeval::f_env(chk)
-
-  chkr <- function(...) {
-    fs <- list(...)
-
-    not_check_expr <- vapply(fs, Negate(is_check_expr), logical(1))
-    if (any(not_check_expr)) {
-      args <- paste(
-        vapply(fs[not_check_expr], deparse_collapse, character(1)),
-        collapse = ", "
-      )
-      stop_wo_call("LHS of formula(e) not empty or string: ", args)
-    }
-
-    wo_msg <- vapply(fs, is_onesided, logical(1))
-    fs[wo_msg] <- lapply(fs[wo_msg], function(f) {
-      ff_lhs(f) <- paste(.msg, deparse_collapse(lazyeval::f_rhs(f)), sep = ": ")
-      f
-    })
-
-    # Cannot use lazyeval::f_new (<= 0.2.0) because lhs is not a language object
-    ff_new(.rhs, fs, .env)
-  }
-
-  structure(chkr, class = c("check_maker", class(chkr)))
+  is_closure(x) && inherits(x, "check_maker")
 }
 
 #' @rdname input-validators
@@ -113,13 +83,39 @@ localize_ <- function(chk) {
 #'       item has its own error message, the error message is derived from that
 #'       of \code{chk} (i.e., the left-hand side of \code{chk}).
 #'   }
-localize <- firmly(
-  localize_,
+localize <- list(
   list("`chk` must be a formula of the form <string> ~ <predicate>" ~ chk) ~
     is_gbl_check_formula
-)
+) %checkin%
+  function(chk) {
+    .msg <- ff_eval_lhs(chk)
+    .rhs <- lazyeval::f_rhs(chk)
+    .env <- lazyeval::f_env(chk)
 
-globalize_ <- function(chkr) environment(chkr)$chk
+    chkr <- function(...) {
+      fs <- list(...)
+
+      not_check_expr <- vapply(fs, Negate(is_check_expr), logical(1))
+      if (any(not_check_expr)) {
+        args <- paste(
+          vapply(fs[not_check_expr], deparse_collapse, character(1)),
+          collapse = ", "
+        )
+        stop_wo_call("LHS of formula(e) not empty or string: ", args)
+      }
+
+      wo_msg <- vapply(fs, is_onesided, logical(1))
+      fs[wo_msg] <- lapply(fs[wo_msg], function(f) {
+        ff_lhs(f) <- paste(.msg, deparse_collapse(lazyeval::f_rhs(f)), sep = ": ")
+        f
+      })
+
+      # Cannot use lazyeval::f_new (<= 0.2.0) because lhs is not a language object
+      ff_new(.rhs, fs, .env)
+    }
+
+    structure(chkr, class = c("check_maker", class(chkr)))
+  }
 
 #' @rdname input-validators
 #' @export
@@ -127,11 +123,13 @@ globalize_ <- function(chkr) environment(chkr)$chk
 #'   by \code{localize}.
 #' @return \code{globalize} returns the global-scope check formula from which
 #'   the function \code{chkr} is derived.
-globalize <- firmly(
-  globalize_,
+globalize <- list(
   list("`chkr` must be a local checker function (see ?localize)" ~ chkr) ~
     is_check_maker
-)
+) %checkin%
+  function(chkr) {
+    environment(chkr)$chk
+  }
 
 #' @export
 print.check_maker <- function(x, ...) {
@@ -144,7 +142,7 @@ print.check_maker <- function(x, ...) {
   if (is_lambda(p)) {
     cat(deparse_collapse(express_lambda(p)), "\n")
   } else {
-    print(p)
+    print.default(p)
   }
 
   cat("\n* Error message:\n")

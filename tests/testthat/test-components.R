@@ -62,15 +62,15 @@ test_that("firm_checks gets checks for firmly applied function", {
     # No checks if we only check for missing arguments
     expect_null(firm_checks(ffs[1L]))
 
-    # Checks in chks are correctly encoded in chks_df
+    # Checks in chks are correctly encoded in fc
     for (ff in ffs[-1L]) {
-      chks_df <- firm_checks(ff)
+      fc <- firm_checks(ff)
 
       # Exactly four checks
-      expect_equal(nrow(chks_df), 4L)
+      expect_equal(nrow(fc), 4L)
 
       for (msg in names(exprs)) {
-        expect_identical(chks_df[chks_df$msg == msg, ]$expr[[1L]], exprs[[msg]])
+        expect_identical(fc[fc$msg == msg, "expr"][[1L]], exprs[[msg]])
       }
     }
   }
@@ -113,5 +113,42 @@ test_that("firm_args gets missing-arguments for firmly applied function", {
 test_that("firm_args returns NULL for non-firmly applied functions", {
   for (f in fs) {
     expect_null(firm_args(f))
+  }
+})
+
+test_that("firm_error gets error subclass for firmly applied functions", {
+  for (f in fs) {
+    nm <- nomen(formals(f))$nm
+    if (!length(nm)) {
+      # No named argument, so firmly does not create firm closure
+      expect_null(firm_error(suppressWarnings(firmly(f, ~ is.numeric))))
+
+      next
+    }
+
+    f_firm1 <- firmly(f, ~is.numeric)
+    f_firm2 <- firmly(f, ~is.numeric, .error_class = c("customError", "simpleError"))
+    f_firm3 <- firmly(f_firm2, ~{. > 0})
+    f_firm4 <- firmly(f_firm3, .error_class = "newError")
+    f_firm5 <- firmly(f, .error_class = "customError")
+    f_firm_warn1 <- firmly(f_firm1, .warn_missing = nm, .error_class = "newError")
+    f_firm_warn2 <- firmly(f_firm1, .warn_missing = nm)
+    # .error_class is ignored if there are no checks
+    f_warn_only <- firmly(f, .warn_missing = nm, .error_class = "customError")
+
+    expect_identical(firm_error(f_firm1), "simpleError")
+    expect_identical(firm_error(f_firm2), c("customError", "simpleError"))
+    expect_identical(firm_error(f_firm3), c("customError", "simpleError"))
+    expect_identical(firm_error(f_firm4), "newError")
+    expect_identical(firm_error(f_firm5), NULL)
+    expect_identical(firm_error(f_firm_warn1), "newError")
+    expect_identical(firm_error(f_firm_warn2), "simpleError")
+    expect_identical(firm_error(f_warn_only), NULL)
+  }
+})
+
+test_that("firm_error returns NULL for non-firmly applied functions", {
+  for (f in fs) {
+    expect_null(firm_error(f))
   }
 })

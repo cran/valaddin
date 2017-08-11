@@ -12,6 +12,19 @@ unfurl <- function(.symb, .nm, .msg, .env) {
   chk_items
 }
 
+checks_df <- function(pred, items, env, string) {
+  n <- length(items)
+  x <- list(
+    expr   = lapply(items, function(.) as.call(c(pred, lazyeval::f_rhs(.)))),
+    env    = `[<-`(vector("list", n), list(env)),
+    string = string,
+    msg    = names(items)
+  )
+  class(x) <- "data.frame"
+  attr(x, "row.names") <- .set_row_names(n)
+  x
+}
+
 # Assemble a data frame of checks from a check formula
 assemble <- function(.chk, .nm, .symb, .env = lazyeval::f_env(.chk)) {
   p <- lazyeval::f_rhs(.chk)
@@ -27,19 +40,10 @@ assemble <- function(.chk, .nm, .symb, .env = lazyeval::f_env(.chk)) {
     unfurl(.symb, .nm, lhs, .env)
   }
   string <- vapply(chk_items, deparse_call, character(1), fn_expr = p_expr)
-  is_blank <- names(chk_items) == ""
+  is_blank <- !nzchar(names(chk_items))
   names(chk_items)[is_blank] <- sprintf("FALSE: %s", string[is_blank])
 
-  dplyr::as_data_frame(
-    list(
-      expr   = lapply(chk_items,
-                      function(.) as.call(c(predicate, lazyeval::f_rhs(.)))),
-      env    = list(.env),
-      string = string,
-      msg    = names(chk_items)
-    ),
-    validate = FALSE
-  )
+  checks_df(predicate, chk_items, .env, string)
 }
 
 # Warning apparatus -------------------------------------------------------
@@ -71,23 +75,20 @@ warning_closure <- function(.fn, .warn) {
 
   function() {
     call <- match.call()
-    .warn(call)
-
-    parent <- parent.frame()
-    eval(.fn(call), parent, parent)
+    encl <- parent.env(environment())
+    encl$.warn(call)
+    eval.parent(`[[<-`(call, 1L, encl$.fn))
   }
 }
 
 # Validation apparatus ----------------------------------------------------
-
-is_error <- function(x) inherits(x, "error")
 
 problems <- function(chks, verdict) {
   vapply(seq_along(verdict), function(i) {
     x <- verdict[[i]]
     if (is_false(x)) {
       chks$msg[[i]]
-    } else if (is_error(x)) {
+    } else if (inherits(x, "error")) {
       sprintf("Error evaluating check %s: %s", chks$string[[i]], x$message)
     } else {
       sprintf("Predicate value %s not TRUE/FALSE: %s",
@@ -96,43 +97,68 @@ problems <- function(chks, verdict) {
   }, character(1))
 }
 
-promises <- function(.call, .sig, .env) {
-  .call[[1L]] <- eval(call("function", .sig, quote(environment())))
-  eval(.call, .env)
-}
-
-validating_closure <- function(.chks, .sig, .fn, .warn) {
-  force(.chks)
-  force(.sig)
+#' @importFrom stats runif setNames
+validating_closure <- function(.chks, .sig, .nm, .fn, .warn, .error_class) {
   force(.fn)
   force(.warn)
+  force(.error_class)
+
+  # Input-validation environment
+  PROM.ENV <- sprintf("__PROM.ENV__%.12f", runif(1L))
+  make_promises <- eval(call("function", .sig, quote(environment())))
+  ve <- new.env(parent = emptyenv())
+  promises <- function(call, env_call) {
+    ve[[PROM.ENV]] <- eval(`[[<-`(call, 1L, make_promises), env_call)
+    parent.env(ve[[PROM.ENV]]) <- environment(.fn)
+    ve
+  }
+
+  # Ensure that promises in validation expressions are from ve[["PROM.ENV"]]
+  subs <- lapply(setNames(nm = .nm), function(.)
+    substitute(get(., e), list(. = ., e = as.name(PROM.ENV)))
+  )
+  exprs <- lapply(seq_len(nrow(.chks)), function(i) {
+    expr <- .chks$expr[[i]]
+    # 'expr' is a call, so its second component is the call arguments
+    expr[[2L]] <- eval(substitute(substitute(., subs), list(. = expr[[2L]])))
+    list(expr = expr, env = .chks$env[[i]])
+  })
+
+  deparse_w_defval <- function(call) {
+    .sig[names(call[-1L])] <- call[-1L]
+    .sig <- .sig[!vapply(.sig, identical, logical(1), quote(expr = ))]
+    deparse_collapse(as.call(c(call[[1L]], .sig)))
+  }
+  error <- function(message) {
+    structure(
+      list(message = message, call = NULL),
+      class = c(.error_class, "error", "condition")
+    )
+  }
+
+  # Local bindings to avoid (unlikely) clashes with formal arguments
+  enumerate_many <- match.fun("enumerate_many")
+  problems <- match.fun("problems")
 
   function() {
     call <- match.call()
-    .warn(call)
-
-    parent <- parent.frame()
     encl <- parent.env(environment())
-    env <- promises(call, encl$.sig, parent)
-    verdict <- Map(
-      function(expr, env_chk) {
-        parent.env(env) <- env_chk
-        tryCatch(
-          suppressWarnings(eval(expr, env, env)),
-          error = identity
-        )
-      },
-      encl$.chks$expr, encl$.chks$env
-    )
-    pass <- vapply(verdict, is_true, logical(1))
+    encl$.warn(call)
+    env <- encl$promises(call, parent.frame())
+    verdict <- suppressWarnings(lapply(encl$exprs, function(.)
+      tryCatch(eval(.$expr, `parent.env<-`(env, .$env)), error = identity)
+    ))
+    pass <- vapply(verdict, isTRUE, logical(1))
 
     if (all(pass)) {
-      eval(.fn(call), parent, parent)
+      eval.parent(`[[<-`(call, 1L, encl$.fn))
     } else {
       fail <- !pass
-      msg_call  <- sprintf("%s\n", deparse_collapse(call))
-      msg_error <- enumerate_many(problems(encl$.chks[fail, ], verdict[fail]))
-      stop_wo_call(paste0(msg_call, msg_error))
+      msg_call  <- encl$deparse_w_defval(call)
+      msg_error <- encl$enumerate_many(
+        encl$problems(encl$.chks[fail, ], verdict[fail])
+      )
+      stop(encl$error(paste(msg_call, msg_error, sep = "\n")))
     }
   }
 }
@@ -148,9 +174,12 @@ nomen <- function(sig) {
 
 skip <- function(...) invisible()
 
-firmly_ <- function(.f, ..., .checklist = list(), .warn_missing = character()) {
+firmly_ <- function(.f, ..., .checklist = list(),
+                    .warn_missing = character(), .error_class = character()) {
   chks <- unname(c(list(...), .checklist))
-  if (!length(chks) && !length(.warn_missing)) {
+
+  error_class_inapplicable <- is.null(firm_checks(.f))
+  if (!length(chks) && !length(.warn_missing) && error_class_inapplicable) {
     return(.f)
   }
 
@@ -159,105 +188,105 @@ firmly_ <- function(.f, ..., .checklist = list(), .warn_missing = character()) {
   }
 
   sig <- formals(.f)
-  if (is.null(sig) || identical(names(sig), "...")) {
+  arg <- nomen(sig)
+  if (!length(arg$nm)) {
     if (length(.warn_missing)) {
       stop_wo_call("Invalid `.warn_missing`: `.f` has no named argument")
     }
-    # If .warn_missing is empty, then chks is not
+    # No arguments, so assume .error_class inapplicable, hence chks non-empty
     warning_wo_call("Check formula(e) not applied: `.f` has no named argument")
     return(.f)
   }
 
-  arg <- nomen(sig)
   arg_unknown <- !(.warn_missing %in% arg$nm)
   if (any(arg_unknown)) {
     stop_wo_call(sprintf("Invalid `.warn_missing`: %s not argument(s) of `.f`",
                          quote_collapse(.warn_missing[arg_unknown])))
   }
 
-  fn <- call_fn(if (is_firm(.f)) firm_core(.f) else .f)
+  fn <- if (is_firm(.f)) firm_core(.f) else .f
   pre_chks <- firm_checks(.f)
   maybe_warn <- warn(.warn_missing) %||% warn(firm_args(.f)) %||% skip
+  error_class <- .error_class %||% firm_error(.f) %||% "simpleError"
 
   if (length(chks)) {
-    assembled_chks <- dplyr::distinct_(
-      dplyr::bind_rows(
-        pre_chks,
-        lapply(chks, assemble, .nm = arg$nm, .symb = arg$symb)
-      )
+    asm_chks <- unique(
+      do.call("rbind",
+              c(list(pre_chks),
+                lapply(chks, assemble, .nm = arg$nm, .symb = arg$symb)))
     )
-    f <- validating_closure(assembled_chks, sig, fn, maybe_warn)
+    f <- validating_closure(asm_chks, sig, arg$nm, fn, maybe_warn, error_class)
   } else {
-    # .warn_missing not empty
+    # .warn_missing or .error_class is non-empty
     f <- if (is.null(pre_chks)) {
       warning_closure(fn, maybe_warn)
     } else {
-      validating_closure(pre_chks, sig, fn, maybe_warn)
+      validating_closure(pre_chks, sig, arg$nm, fn, maybe_warn, error_class)
     }
   }
 
   firm_closure(with_sig(f, sig, .attrs = attributes(.f)))
 }
 
+is_closure <- function(x) typeof(x) == "closure"
 #' @export
 is_firm <- function(x) {
-  purrr::is_function(x) && inherits(x, "firm_closure")
+  is_closure(x) && inherits(x, "firm_closure")
 }
 
 firm_closure <- function(.f) {
-  if (!is_firm(.f)) {
+  .f <- match.fun(.f)
+  if (!inherits(.f, "firm_closure")) {
     class(.f) <- c("firm_closure", class(.f))
   }
   .f
 }
 
-loosely_ <- function(.f, .keep_check = FALSE, .keep_warning = FALSE,
-                     .quiet = TRUE) {
-  is_not_firm <- !is_firm(.f)
-  if (is_not_firm || .keep_check && .keep_warning) {
-    if (is_not_firm && !.quiet) {
-      warning_wo_call("`.f` not a firmly applied function")
-    }
+#' @export
+firmly <- firmly_(
+  firmly_,
+  list("`.f` not an interpreted function" ~ .f) ~ is_closure,
+  list("`.checklist` not a list" ~ .checklist) ~ is.list,
+  list(
+    "`.warn_missing` not a character vector" ~ .warn_missing,
+    "`.error_class` not a character vector" ~ .error_class
+  ) ~ {is.character(.) && !anyNA(.)}
+)
+
+#' @export
+`%checkin%` <- function(.checks, .f) {
+  nms <- names(.checks) %||% character(length(.checks))
+  firmly(
+    .f,
+    .checklist    = .checks[!nms %in% c(".warn_missing", ".error_class")],
+    .warn_missing = .checks[[".warn_missing"]] %||% character(),
+    .error_class  = .checks[[".error_class"]] %||% character()
+  )
+}
+
+#' @export
+loosely <- function(.f, .keep_check = FALSE, .keep_warning = FALSE) {
+  if (!inherits(.f, "firm_closure") || .keep_check && .keep_warning) {
     return(.f)
   }
 
-  f_core <- firm_core(.f)
   f_chks <- if (.keep_check) firm_checks(.f) else NULL
   f_args <- if (.keep_warning) firm_args(.f) else NULL
 
   if (is.null(f_chks) && is.null(f_args)) {
-    return(f_core)
+    return(firm_core(.f))
   }
 
   sig <- formals(.f)
   f <- if (is.null(f_chks)) {
-    warning_closure(call_fn(f_core), warn(f_args))
+    warning_closure(firm_core(.f), warn(f_args))
   } else {
-    validating_closure(f_chks, sig, call_fn(f_core), skip)
+    validating_closure(f_chks, sig, nomen(sig)$nm,
+                       firm_core(.f), skip, firm_error(.f))
   }
 
   firm_closure(with_sig(f, sig, .attrs = attributes(.f)))
 }
-
-#' @export
-firmly <- firmly_(
-  firmly_,
-  list("`.f` not an interpreted function" ~ .f) ~ purrr::is_function,
-  list("`.checklist` not a list" ~ .checklist) ~ is.list,
-  list("`.warn_missing` not a character vector" ~ .warn_missing) ~
-    {is.character(.) && !anyNA(.)}
-)
-
-#' @export
-loosely <- firmly(
-  loosely_,
-  list("`.f` not an interpreted function" ~ .f) ~ purrr::is_function,
-  list(
-    "`.keep_check` not TRUE/FALSE"   ~ .keep_check,
-    "`.keep_warning` not TRUE/FALSE" ~ .keep_warning,
-    "`.quiet` not TRUE/FALSE"        ~ .quiet
-  ) ~ {is_true(.) || is_false(.)}
-)
 
 # Printing ----------------------------------------------------------------
 
@@ -266,13 +295,21 @@ print.firm_closure <- function(x, ...) {
   cat("<firm_closure>\n")
 
   cat("\n* Core function:\n")
-  print(firm_core(x))
+  print.default(firm_core(x))
 
   cat("\n* Checks (<predicate>:<error message>):\n")
   calls <- firm_checks(x)
-  if (!is.null(calls) && nrow(calls)) {
+  if (length(calls)) {
     labels <- paste0(calls$string, ":\n", encodeString(calls$msg, quote = "\""))
     cat(enumerate_many(labels))
+  } else {
+    cat("None\n")
+  }
+
+  cat("\n* Error subclass for check errors:\n")
+  subclass <- firm_error(x)
+  if (!is.null(subclass)) {
+    cat(paste(subclass, collapse = ", "), "\n")
   } else {
     cat("None\n")
   }
@@ -295,21 +332,27 @@ print.firm_closure <- function(x, ...) {
 #' the original function (without checks). \code{is_firm} is a predicate
 #' function that checks whether an object is a firmly applied function, i.e.,
 #' a function created by \code{firmly}.
+#' \cr\cr
+#' Use \code{\%checkin\%} to apply \code{firmly} as an operator. Since this
+#' allows you to keep checks and arguments adjacent, it is the preferred way to
+#' use \code{firmly} in scripts and packages.
 #'
-#' @aliases firmly loosely is_firm
-#' @evalRd rd_usage(c("firmly", "loosely", "is_firm"))
+#' @aliases firmly %checkin% loosely is_firm
+#' @evalRd rd_usage(c("firmly", "%checkin%", "loosely", "is_firm"))
 #'
-#' @param .f Interpreted function (of type \code{"closure"}), i.e., not a
-#'   primitive function.
+#' @param .f Interpreted function, i.e., closure.
 #' @param \dots Input-validation check formula(e).
 #' @param .checklist List of check formulae. (These are combined with check
 #'   formulae provided via \code{\dots}.)
-#' @param .warn_missing Character vector of arguments of \code{.f} whose absence
-#'   should raise a warning.
-#' @param .keep_check,.keep_warning \code{TRUE} or \code{FALSE}: Should existing
-#'   checks, resp. missing-argument warnings, be kept?
-#' @param .quiet \code{TRUE} or \code{FALSE}: Should a warning that \code{.f} is
-#'   not a firmly applied function be muffled?
+#' @param .warn_missing Arguments of \code{.f} whose absence should raise a
+#'   warning (character).
+#' @param .error_class Subclass of the error condition to be raised when an
+#'   input validation error occurs (character).
+#' @param .checks List of check formulae, optionally containing character
+#'   vectors named \code{.warn_missing}, \code{.error_class}, corresponding to
+#'   the similarly named arguments.
+#' @param .keep_check,.keep_warning Should existing checks, resp.
+#'   missing-argument warnings, be kept?
 #' @param x Object to test.
 #'
 #' @section Check Formulae:
@@ -408,11 +451,25 @@ print.firm_closure <- function(x, ...) {
 #'     tabulating every failing check. (If all checks pass, the call to
 #'     \code{.f} respects lazy evaluation, as usual.)
 #'
+#'     \subsection{Subclass of the input-validation error object}{
+#'       The subclass of the error object is \code{.error_class}, unless
+#'       \code{.error_class} is \code{character()}. In the latter case, the
+#'       subclass of the error object is that of the existing error object, if
+#'       \code{.f} is itself a firmly applied function, or it is
+#'       \code{"simpleError"}, otherwise.
+#'     }
+#'
 #'     \subsection{Formal Arguments and Attributes}{
 #'       \code{firmly} preserves the attributes and formal arguments of
 #'       \code{.f} (except that the \code{"class"} attribute gains the component
 #'       \code{"firm_closure"}, unless it already contains it).
 #'     }
+#'   }
+#'   \subsection{\code{\%checkin\%}}{
+#'     \code{\%checkin\%} applies the check formula(e) in the list \code{.checks}
+#'     to \code{.f}, using \code{firmly}. The \code{.warn_missing} and
+#'     \code{.error_class} arguments of \code{firmly} may be specified as named
+#'     components of \code{.checks}.
 #'   }
 #'   \subsection{\code{loosely}}{
 #'     \code{loosely} returns \code{.f}, unaltered, when \code{.f} is not a
@@ -448,8 +505,8 @@ print.firm_closure <- function(x, ...) {
 #'       completion.
 #'     \item To access the components of a firmly applied function, use
 #'       \code{\link{firm_core}}, \code{\link{firm_checks}},
-#'       \code{\link{firm_args}} (or simply \code{\link[base]{print}} the
-#'       function to display its components).
+#'       \code{\link{firm_error}}, \code{\link{firm_args}}, (or simply
+#'       \code{\link[base]{print}} the function to display its components).
 #'   }
 #'
 #' @examples
@@ -537,6 +594,28 @@ print.firm_closure <- function(x, ...) {
 #' # firmly won't force an argument that's not involved in checks
 #' g <- firmly(function(x, y) "Pass", list(~x) ~ is.character)
 #' g(c("a", "b"), stop("Not signaled"))  # [1] "Pass"
+#'
+#' # In scripts and packages, it is recommended to use the operator %checkin%
+#' vec_add <- list(
+#'   ~is.numeric,
+#'   list(~length(x) == length(y)) ~ isTRUE,
+#'   .error_class = "inputError"
+#' ) %checkin%
+#'   function(x, y) {
+#'     x + y
+#'   }
+#'
+#' # Or call firmly with .f explicitly assigned to the function
+#' vec_add2 <- firmly(
+#'   ~is.numeric,
+#'   list(~length(x) == length(y)) ~ isTRUE,
+#'   .f = function(x, y) {
+#'     x + y
+#'   },
+#'   .error_class = "inputError"
+#' )
+#'
+#' all.equal(vec_add, vec_add2)  # [1] TRUE
 #' }
 #'
 #' @name firmly

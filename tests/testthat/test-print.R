@@ -1,9 +1,9 @@
-context("Printing")
-
 # Like expect_output(), but accepts expectation strings with less escaping
 expect_output_p <- perlize(expect_output)
 
 # firm_closure ----------------------------------------------------------
+
+context("Printing firm closures")
 
 has_xy <- map_lgl(args_list, ~ all(c("x", "y") %in% names(.)))
 fs <- lapply(args_list[has_xy], pass_args)
@@ -15,7 +15,7 @@ fs_firm <- lapply(fs, firmly, .checklist = chks)
 
 test_that("firm closure original function body is displayed", {
   for (i in seq_along(fs)) {
-    original_fn <- capture_output(print(fs[[i]]))
+    original_fn <- capture_output(print.default(fs[[i]]))
     expect_output_p(print(fs_firm[[i]]), original_fn)
   }
 })
@@ -25,6 +25,20 @@ test_that("firm closure checks are displayed", {
     expect_output_p(print(f), "is.numeric(x):\n\"Not numeric\"")
     expect_output_p(print(f), "is.character(y):\n\"Not character\"")
   }
+})
+
+test_that("firm closure error subclass is displayed", {
+  for (f in fs_firm) {
+    g <- firmly(f, .error_class = c("extraSpecialError", "specialError"))
+
+    expect_output_p(print(f), "check errors:\nsimpleError")
+    expect_output_p(print(g), "check errors:\nextraSpecialError, specialError")
+  }
+
+  expect_output_p(
+    print(firmly(function(x) x, .warn_missing = "x")),
+    "check errors:\nNone"
+  )
 })
 
 test_that("firm closure arguments whose absence is checked are displayed", {
@@ -48,6 +62,8 @@ test_that("firm closure arguments whose absence is checked are displayed", {
 
 # check_maker -------------------------------------------------------------
 
+context("Printing check makers")
+
 test_that("local checker predicate is displayed", {
   header <- "* Predicate function:"
 
@@ -60,7 +76,7 @@ test_that("local checker predicate is displayed", {
 
   for (f in fmls) {
     pred <- lazyeval::f_rhs(f)
-    out <- paste(header, capture_output(pred), sep = "\n")
+    out <- paste(header, capture_output(print.default(pred)), sep = "\n")
 
     expect_output_p(print(localize(f)), out)
   }
@@ -72,7 +88,8 @@ test_that("local checker error message is displayed", {
   # vld_numeric, vld_scalar_numeric have exceptional error messages
   nms_chkrs <- setdiff(
     grep("^vld_", getNamespaceExports("valaddin"), value = TRUE),
-    c("vld_numeric", "vld_scalar_numeric", "vld_true", "vld_false")
+    c("vld_numeric", "vld_scalar_numeric", "vld_true", "vld_false", "vld_any",
+      "vld_all")
   )
   chkrs <- lapply(nms_chkrs, getExportedValue, ns = "valaddin")
   names(chkrs) <- sub("^vld_", "", nms_chkrs)
@@ -83,4 +100,25 @@ test_that("local checker error message is displayed", {
 
     expect_output_p(print(chkrs[[nm]]), out)
   }
+})
+
+# Error messages ----------------------------------------------------------
+
+context("Printing error messages")
+
+test_that("call displays all default values", {
+  foo <- firmly(function(x, y = 1, z = f(x, y), w, ..., a = 2) NULL,
+                list(~x) ~ is.numeric)
+  expect_error(foo("1"), 'foo\\(x = "1", y = 1, z = f\\(x, y\\), a = 2\\)')
+})
+
+test_that("call does not display arguments without value", {
+  foo <- firmly(function(x, y = 1, absent) NULL, list(~x) ~ is.numeric)
+  errmsg <- tryCatch(foo("1"), error = conditionMessage)
+  expect_false("absent" %in% errmsg)
+})
+
+test_that("call displays all arguments with supplied value", {
+  foo <- firmly(function(x, y, z) NULL, list(~x) ~ is.numeric)
+  expect_error(foo("1", z = 0), 'foo\\(x = "1", z = 0\\)')
 })

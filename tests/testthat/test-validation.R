@@ -75,7 +75,8 @@ test_that("one-sided formula produces global check", {
   # Error evaluating check because of invalid input types
   args <- list(1, "y", v = 0)
 
-  expect_error(do.call("f_pos", args), "FALSE[^\n]*?is\\.numeric\\(y\\)")
+  expect_error(do.call("f_pos", args),
+               "FALSE[^\n]*?is\\.numeric\\(y\\)")
   expect_error(do.call("f_pos", args),
                "FALSE[^\n]*?function\\(.\\) \\{\\. > 0\\}\\)\\(z\\)")
   expect_error(do.call("f_pos", args),
@@ -283,6 +284,74 @@ test_that("check-eval error when check-formula variable not function variable", 
   }
 })
 
+test_that("warnings that arise when validating inputs are suppressed", {
+  is_numeric <- function(x) {
+    out <- tryCatch(is.numeric(x), warning = identity)
+    if (inherits(out, "warning")) {
+      message(conditionMessage(out))
+      suppressWarnings(is.numeric(x))
+    } else {
+      out
+    }
+  }
+  f <- function(x) NULL
+  ff <- firmly(f, ~is_numeric)
+
+  # No error or warning or messages when evaluating core function
+  expect_error(f(log(-1)), NA)
+  expect_warning(f(log(-1)), NA)
+  expect_message(f(log(-1)), NA)
+
+  # Still no error when validating inputs
+  expect_error(ff(log(-1)), NA)
+
+  # Warning created when validating inputs captured as a message
+  expect_message(ff(log(-1)), "NaNs produced")
+
+  # However, the warning itself is suppressed
+  expect_warning(ff(log(-1)), NA)
+})
+
+test_that("default input validation error subclass is 'simpleError'", {
+  f <- firmly(function(x) x, ~is.numeric)
+  error_class <- class(tryCatch(f("0"), error = identity))
+  expect_identical(error_class, c("simpleError", "error", "condition"))
+})
+
+test_that("input validation error is signaled by error subclass .error_class", {
+  error_classes <- list(
+    character(),
+    "specialError",
+    c("extraSpecialError", "specialError")
+  )
+
+  for (subclass in error_classes) {
+    f <- firmly(function(x) x, ~is.numeric, .error_class = subclass)
+
+    expect_identical(
+      class(tryCatch(f("0"), error = identity)),
+      c(subclass %||% "simpleError", "error", "condition")
+    )
+  }
+})
+
+test_that("error subclass changes only when .error_class is given", {
+  get_error_class <- function(expr) class(tryCatch(expr, error = identity))
+  errorfy <- function(x) c(x, "error", "condition")
+
+  f <- firmly(function(x) x, ~is.numeric)
+  g <- firmly(f, ~{. > 0})
+  h <- firmly(g, .error_class = "newError")
+  i <- firmly(h, .warn_missing = "x")
+  j <- firmly(i, ~{log(.) > 1}, .error_class = "newerError")
+
+  expect_identical(get_error_class(f("0")), errorfy("simpleError"))
+  expect_identical(get_error_class(g("0")), errorfy("simpleError"))
+  expect_identical(get_error_class(h("0")), errorfy("newError"))
+  expect_identical(get_error_class(i("0")), errorfy("newError"))
+  expect_identical(get_error_class(j("0")), errorfy("newerError"))
+})
+
 test_that("predicate is evaluated in its ambient formula environment", {
   has_xy <- map_lgl(args_list, ~ all(c("x", "y") %in% names(.)))
   fs <- lapply(args_list[has_xy], pass_args)
@@ -322,26 +391,130 @@ test_that("predicate is evaluated in its ambient formula environment", {
   }
 })
 
-test_that("names in checking procedure don't override function arguments", {
-  # Names in execution environment of validating_closure()
-  nms <- c("call", "parent", "encl", "env", "verdict", "pass", "fail",
-           "msg_call", "msg_error", ".chks", ".sig", ".fn", ".warn")
-  def_args <- setNames(seq_along(nms), nms)
-  f <- eval(call("function", as.pairlist(def_args), quote("Pass")))
-  f_firm <- firmly(f, "Not numeric" ~ is.numeric)
+test_that("formal arguments don't override names in validation procedure", {
+  # Bindings in execution/enclosing environment of validating_closure()
+  nms    <- c("call", "encl", "env", "verdict", "pass", "fail",
+              "msg_call", "msg_error", ".chks", ".sig", "exprs")
+  nms_fn <- c(".fn", ".warn", "deparse_w_defval", "enumerate_many", "error",
+              "problems", "promises")
 
-  # Check that f, f_firm are correctly defined
-  expect_error(f_firm(), NA)
-  expect_identical(f_firm(), f())
-
-  # ~ 10k possible combinations of arguments, so randomly sample them instead
-  subsets <- expand.grid(rep(list(c(TRUE, FALSE)), length(nms)))
-  rows <- {set.seed(1); sample.int(nrow(subsets), 100L)}
-  for (i in rows) {
-    # Make invalid argument list (i.e., non-numeric)
-    subset <- t(subsets[i, ])
-    args <- as.list(setNames(nm = nms[subset]))
-
-  expect_n_errors(n = length(args), f_firm, args, "Not numeric")
+  sum_args <- parse(text = paste(nms, collapse = "+"))
+  f <- function() {
+    # Ensure that no arguments have are logical (thus are coercible to numeric)
+    args <- as.list(match.call()[-1])
+    stopifnot(vapply(args, Negate(is.logical), logical(1)))
+    eval(sum_args)
   }
+
+  # All function arguments get the function wrong_fn as default value
+  wrong_fn <- function(...) {
+    message("This function shouldn't have been called!")
+  }
+  def_args_fn <- stats::setNames(vector("list", length(nms_fn)), nms_fn)
+  def_args_fn[] <- list(quote(wrong_fn))
+
+  # All non-function arguments get an positive integer default value
+  def_args_nonfn <- stats::setNames(seq_along(nms), nms)
+  def_args <- c(def_args_fn, def_args_nonfn)
+  formals(f) <- as.pairlist(def_args)
+
+  make_checkfml <- function(.) eval(parse(text = paste0("~", .)))
+  f_firm <- firmly(f,
+                   lapply(nms_fn, make_checkfml) ~ is.function,
+                   lapply(nms, make_checkfml) ~ is.numeric)
+  f_warn <- firmly(f, .warn_missing = names(def_args))
+
+  # Verify that f_firm(), f_warn() generate no errors and return correct value
+  expect_error(f_firm(), NA)
+  expect_error(do.call("f_warn", def_args), NA)
+  sum(def_args_nonfn) %>%
+    expect_identical(f_firm()) %>%
+    expect_identical(do.call("f_warn", def_args))
+
+  # Verify that f_firm(), f_warn() do not call its function arguments
+  msg <- capture_messages(wrong_fn())
+  expect_gt(length(msg), 0)        # msg is non-empty string
+  expect_message(wrong_fn(), msg)  # wrong_fn() produces msg when called
+  # f_firm(), f_warn() produce no message, so wrong_fn() wasn't called
+  expect_message(f_firm(), NA)
+  expect_message(do.call("f_warn", def_args), NA)
+})
+
+context("Input-validation environment")
+
+test_that("default values of arguments can be validated", {
+  foo <- local({
+    internal <- "internal"
+    function(y, x = internal) NULL
+  })
+  parent.env(environment(foo)) <- baseenv()
+
+  foo_firm_chr <- (function(f) firmly(f, list(~x) ~ is.character))(foo)
+  foo_firm_num <- (function(f) firmly(f, list(~x) ~ is.numeric))(foo)
+
+  expect_error(foo_firm_chr(), NA)
+  expect_error(foo_firm_num(), "FALSE: is.numeric\\(x\\)")
+})
+
+test_that("checking a missing argument raises an error", {
+  foo <- firmly(function(x) NULL, ~is.character)
+
+  expect_error(foo("x"), NA)
+  expect_error(foo(), "Error evaluating check.*?argument \"x\" is missing")
+})
+
+test_that("promise names don't collide with names in predicate environment", {
+  foo <- local({
+    a <- 1
+    function(x, y = a) list(x, y)
+  })
+  parent.env(environment(foo)) <- baseenv()
+
+  foo_firm <- local({
+    x <- "x in predicate environment"
+    y <- "y in predicate environment"
+    a <- "a in predicate environment"
+    predicate <- function(x) is.numeric(x)
+    firmly(foo, ~predicate)
+  })
+
+  # Verify that 'x' is a promise, not the 'x' in environment(foo_firm)
+  expect_error(foo(0), NA)
+  expect_error(foo_firm(environment(foo_firm)$x), "FALSE: predicate\\(x\\)")
+
+  # Verify that 'y' is a promise, not the 'y' in environment(foo_firm)
+  expect_error(foo(0, 1), NA)
+  expect_error(foo_firm(0, environment(foo_firm)$y), "FALSE: predicate\\(y\\)")
+
+  # Objects in environment(foo_firm) won't substitute missing promises
+  expect_error(foo_firm(), "Error evaluating check.*?argument \"x\" is missing")
+})
+
+test_that("promise with same name as predicate doesn't hijack predicate", {
+  p <- function(x) is.function(x)
+  foo <- function(p) NULL
+  foo_firm <- firmly(foo, list("Argument 'p' is not a function" ~ p) ~ p)
+
+  # 'p' as an argument is a promise
+  expect_error(foo_firm(p), NA)
+  expect_error(foo_firm(1), "Argument 'p' is not a function")
+
+  # Verify that the predicate function 'p' is not the argument 'p'
+  expect_error(foo_firm(function(...) FALSE), NA)
+})
+
+test_that("non-promise objects in validation expression come from predicate", {
+  a <- ""
+  foo <- function(x) x
+
+  foo_firm <- local({
+    a <- "Non-empty string"
+    firmly(foo, list(~paste0(x, a)) ~ {identical(., "Non-empty string")})
+  })
+
+  # 'a' is empty
+  expect_false(nzchar(a))
+
+  # But non-empty 'a' from predicate is used in validation expression
+  expect_error(foo_firm(""), NA)
 })

@@ -29,7 +29,8 @@ make_vld_chkrs <- function(nms, pattern, sep, ns, env = parent.frame()) {
 }
 
 # purrr::is_*numeric() are deprecated in purrr (>= 0.2.2.9000)
-re_is_not_numeric <- "^is_((?!numeric).)*$"
+# purrr::is_function detects closures not functions in general
+re_exclude <- "^is_(?!.*(numeric|function)).*$"
 
 pkg <- list(
   base = list(
@@ -38,14 +39,15 @@ pkg <- list(
       "is.environment", "is.expression",  "is.factor",      "is.language",
       "is.matrix",      "is.na",          "is.name",        "is.nan",
       "is.ordered",     "is.pairlist",    "is.primitive",   "is.raw",
-      "is.recursive",   "is.symbol",      "is.table",       "is.unsorted"
+      "is.recursive",   "is.symbol",      "is.table",       "is.unsorted",
+      "is.function"
     ),
     pattern = "^is\\.",
     sep = "\\.",
     ns = "base"
   ),
   purrr = list(
-    nms = grep(re_is_not_numeric, getNamespaceExports("purrr"),
+    nms = grep(re_exclude, getNamespaceExports("purrr"),
                value = TRUE, perl = TRUE),
     pattern = "^is_",
     sep = "_",
@@ -53,18 +55,24 @@ pkg <- list(
   )
 )
 
-chkrs_ <- pkg %>%
-  lapply(function(.) make_vld_chkrs(.$nms, .$pattern, .$sep, .$ns))
+# Use for-loop so that local checkers pick up package namespace environment
+chkrs_ <- vector("list", length(pkg))
+for (nm in names(pkg)) {
+  p <- pkg[[nm]]
+  chkrs_[[nm]] <- make_vld_chkrs(p$nms, p$pattern, p$sep, p$ns)
+}
 chkrs <- do.call("c", unname(chkrs_))
 
 # "numeric" has conflicting interpretations in base R, so treat it differently
-chkrs$vld_numeric <- localize("Not double/integer" ~ is.numeric)
-chkrs$vld_scalar_numeric <- localize(
-  "Not scalar double/integer" ~ {is.numeric(.) && length(.) == 1L}
-)
-
-chkrs$vld_true  <- localize("Not TRUE" ~ is_true)
-chkrs$vld_false <- localize("Not FALSE" ~ is_false)
+chkrs$vld_numeric <- localize(ff_new(is.numeric, "Not double/integer"))
+chkrs$vld_scalar_numeric <- localize(ff_new(
+  quote({is.numeric(.) && length(.) == 1L}), "Not scalar double/integer"))
+chkrs$vld_closure <- localize(ff_new(
+  quote({typeof(.) == "closure"}), "Not closure"))
+chkrs$vld_true  <- localize(ff_new(is_true, "Not TRUE"))
+chkrs$vld_false <- localize(ff_new(is_false, "Not FALSE"))
+chkrs$vld_all <- localize(ff_new(all, "Not all TRUE"))
+chkrs$vld_any <- localize(ff_new(any, "None TRUE"))
 
 # Aliases
 replace_msg <- function(chkr, msg) {
@@ -72,7 +80,6 @@ replace_msg <- function(chkr, msg) {
   ff_lhs(f) <- msg
   localize(f)
 }
-
 chkrs_alias <- list(
   "Not boolean"   = chkrs$vld_scalar_logical,
   "Not number"    = chkrs$vld_scalar_numeric,
@@ -83,7 +90,6 @@ chkrs_alias <- list(
   `names<-`(replace(names(.), "^Not ", "vld_"))
 
 chkrs <- c(chkrs, chkrs_alias)
-
 for (nm in names(chkrs))
   assign(nm, chkrs[[nm]])
 
@@ -98,10 +104,10 @@ nms <- lapply(c(bare = "^vld_bare", scalar = "^vld_scalar"),
               grep, x = names(chkrs_$purrr), value = TRUE, perl = TRUE)
 nms$misc <- c(
   names(chkrs_$base),
-  paste0("vld_", c("true", "false", "empty", "formula",
+  paste0("vld_", c("true", "false", "empty", "formula", "all", "any",
                    "numeric", "scalar_numeric", "number"))
 )
-nms$type <- setdiff(names(chkrs_$purrr), unlist(nms))
+nms$type <- setdiff(c(names(chkrs_$purrr), "vld_closure"), unlist(nms))
 nms <- lapply(nms, function(.) .[order(tolower(.))])
 nms$scalar <- c(nms$scalar, setdiff(names(chkrs_alias), "vld_number"))
 
@@ -114,7 +120,7 @@ trim <- function(x) trimws(tidy(gather(x)), which = "both")
 link_bare  <- "\\link{%s}"
 link_extfn <- "\\code{\\link[%s]{%s}}"
 link_purrr <- trim("
-  \\link[purrr:%s-predicates]{%s predicates}
+  %s predicates
   (\\href{https://cran.r-project.org/package=purrr}{\\pkg{purrr}})
 ")
 
@@ -126,9 +132,9 @@ predicates <- list(
   misc = sprintf(link_extfn, "base", sort(c(pkg$base$nms, "is.numeric"))) %>%
     c(sprintf(link_extfn, "purrr", c("is_empty", "is_formula"))) %>%
     paste(collapse = ", "),
-  bare   = sprintf(link_purrr, "bare-type", "Bare type"),
-  scalar = sprintf(link_purrr, "scalar-type", "Scalar type"),
-  type   = sprintf(link_purrr, "type", "Type")
+  bare   = sprintf(link_purrr, "Bare type"),
+  scalar = sprintf(link_purrr, "Scalar type"),
+  type   = sprintf(link_purrr, "Type")
 ) %>%
   prefix_with("Corresponding predicates:")
 
@@ -229,11 +235,12 @@ NULL
 #' Type checkers
 #'
 #' These functions make check formulae of local scope based on the
-#' correspondingly named \link[purrr:type-predicates]{type predicate} from the
-#' \href{https://cran.r-project.org/package=purrr}{\pkg{purrr}}
-#' package. For example, \code{vld_atomic} creates check formulae (of local
-#' scope) for the \pkg{purrr} predicate function
-#' \code{\link[purrr]{is_atomic}}.
+#' correspondingly named type predicate from the
+#' \href{https://cran.r-project.org/package=purrr}{\pkg{purrr}} package, with
+#' the exception that \code{vld_closure} corresponds to the (inaptly named)
+#' \pkg{purrr} predicate \code{\link[purrr]{is_function}}. For example,
+#' \code{vld_atomic} creates check formulae (of local scope) for the \pkg{purrr}
+#' predicate function \code{\link[purrr]{is_atomic}}.
 #'
 #' @evalRd rd_alias(nms$type)
 #' @evalRd rd_usage(nms$type)
@@ -268,8 +275,7 @@ NULL
 #' Bare type checkers
 #'
 #' These functions make check formulae of local scope based on the
-#' correspondingly named \link[purrr:bare-type-predicates]{bare type predicate}
-#' from the
+#' correspondingly named bare type predicate from the
 #' \href{https://cran.r-project.org/package=purrr}{\pkg{purrr}}
 #' package. For example, \code{vld_bare_atomic} creates check formulae (of
 #' local scope) for the \pkg{purrr} predicate function
@@ -310,8 +316,7 @@ NULL
 #' Scalar type checkers
 #'
 #' These functions make check formulae of local scope based on the
-#' correspondingly named \link[purrr:scalar-type-predicates]{scalar type
-#' predicate} from the
+#' correspondingly named scalar type predicate from the
 #' \href{https://cran.r-project.org/package=purrr}{\pkg{purrr}}
 #' package. For example, \code{vld_scalar_atomic} creates check formulae (of
 #' local scope) for the predicate function

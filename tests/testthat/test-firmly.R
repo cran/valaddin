@@ -4,6 +4,9 @@ fs <- lapply(args_list, pass_args)
 has_args <- purrr::map_lgl(args_list, ~ length(nomen(.)$nm) > 0L)
 fs_with_args <- fs[has_args]
 
+sort_checks_df <- function(x) x[order(x[["string"]]), , drop = FALSE]
+sort_checks <- function(f) sort_checks_df(firm_checks(f))
+
 test_that("error raised when .f is not a closure", {
   errmsg <- "`.f` not an interpreted function"
   bad_fns <- list(NULL, NA, log, 1, "A", quote(ls))
@@ -20,6 +23,17 @@ test_that("error raised when .warn_missing is not a non-NA character vector", {
   for (f in fs) {
     for (val in bad_val) {
       expect_error(firmly(f, .warn_missing = val), errmsg)
+    }
+  }
+})
+
+test_that("error raised when .error_class is not a non-NA character vector", {
+  errmsg <- "`.error_class` not a character vector"
+  bad_val <- list(NA, logical(0), logical(2), 1, 0, quote(x), list("x"))
+
+  for (f in fs) {
+    for (val in bad_val) {
+      expect_error(firmly(f, .error_class = val), errmsg)
     }
   }
 })
@@ -105,8 +119,29 @@ test_that("warning raised when no named args and only check formula(e) given", {
 
 test_that("function is unchanged when no validation specified", {
   for (args in args_list) {
-    f <-  pass_args(args)
+    f <- pass_args(args)
     expect_identical(firmly(f), f)
+  }
+})
+
+test_that("function unchanged when no validation & .error_class inapplicable", {
+  # When no validation (checks or .warn_missing) is given, and .f has no checks,
+  # then .error_class is inapplicable.
+
+  for (args in args_list) {
+    f <- pass_args(args)
+
+    expect_null(firm_checks(f))
+    expect_identical(firmly(f, .error_class = "customError"), f)
+
+    named_args <- setdiff(names(args), "...")
+    if (length(named_args)) {
+      f_warn <- firmly(f, .warn_missing = named_args[[1L]])
+
+      expect_true(is_firm(f_warn))
+      expect_null(firm_checks(f_warn))
+      expect_identical(firmly(f_warn, .error_class = "customError"), f_warn)
+    }
   }
 })
 
@@ -121,8 +156,37 @@ test_that("argument signature is preserved", {
   for (args in args_list) {
     f <- make_fnc(args)
 
-    expect_identical(formals(f), as.pairlist(args))
-    expect_identical(formals(firmly(f)), formals(f))
+    sig <- formals(f)
+    expect_identical(sig, as.pairlist(args))
+    expect_identical(formals(firmly(f)), sig)
+
+    # If there are named arguments, check all possible combination or arguments
+    if (length(setdiff(names(args), "..."))) {
+      nm <- names(args)[names(args) != "..."][[1L]]
+      sig %>%
+        expect_identical(
+          formals(firmly(f, ~is.numeric))
+        ) %>%
+        expect_identical(
+          formals(firmly(f, .warn_missing = nm))
+        ) %>%
+        expect_identical(
+          formals(firmly(f, .error_class = "customError"))
+        ) %>%
+        expect_identical(
+          formals(firmly(f, ~is.numeric, .warn_missing = nm))
+        ) %>%
+        expect_identical(
+          formals(firmly(f, ~is.numeric, .error_class = "customError"))
+        ) %>%
+        expect_identical(
+          formals(firmly(f, .warn_missing = nm, .error_class = "customError"))
+        ) %>%
+        expect_identical(
+          formals(firmly(f, ~is.numeric, .warn_missing = nm,
+                         .error_class = "customError"))
+        )
+    }
   }
 })
 
@@ -180,16 +244,12 @@ test_that("original function body/environment/attributes are preserved", {
 })
 
 test_that("checks in ... are combined with .checklist", {
-  sort_checks <- function(..f) {
-    dplyr::arrange_(firm_checks(..f), ~string)
-  }
-
   f <- function(x, y = x, z = 0, ...) NULL
   chk1 <- list(~x) ~ {. > 0}
   chk2 <- ~is.numeric
 
   f_firm <- firmly(f, chk1, chk2)
-  calls <- dplyr::arrange_(firm_checks(f_firm), ~string)
+  calls <- sort_checks(f_firm)
 
   # 4 checks: One global check on 3 arguments, plus a check on 1 argument
   expect_identical(nrow(calls), 4L)
@@ -222,11 +282,8 @@ test_that("existing checks are preserved when adding new checks", {
     chks_g <- firm_checks(g)
 
     # Checks of f subset of checks of g
-    chks_f_g <- dplyr::distinct(dplyr::bind_rows(chks_g, chks_f))
-    expect_identical(
-      chks_f_g %>% dplyr::arrange_("string"),
-      chks_g %>% dplyr::arrange_("string")
-    )
+    chks_f_g <- unique(rbind(chks_g, chks_f))
+    expect_identical(sort_checks_df(chks_f_g), sort_checks_df(chks_g))
 
     # All previous checks checked
     expect_error(g("1", 1), "Not numeric: `x`")

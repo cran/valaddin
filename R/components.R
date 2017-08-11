@@ -3,21 +3,24 @@
 #' Decompose a firmly applied function (i.e., a function created by
 #' \code{\link{firmly}}):
 #' \itemize{
-#'   \item \code{firm_core()} extracts the underlying \dQuote{core}
+#'   \item \code{firm_core} extracts the underlying \dQuote{core}
 #'     function—the function that is called when all arguments are valid.
-#'   \item \code{firm_checks()} extracts the checks.
-#'   \item \code{firm_args()} extracts the names of arguments whose presence is
-#'     to be checked, i.e., those specified by the \code{.warn_missing} switch
-#'     of \code{\link{firmly}}.
+#'   \item \code{firm_checks} extracts the checks.
+#'   \item \code{firm_error} extracts the subclass of the error condition that
+#'     is signaled when an input validation error occurs.
+#'   \item \code{firm_args} extracts the names of arguments whose presence is to
+#'     be checked, i.e., those specified by the \code{.warn_missing} switch of
+#'     \code{\link{firmly}}.
 #' }
 #'
 #' @param x Object to decompose.
 #' @return If \code{x} is a firmly applied function:
 #'   \itemize{
 #'     \item \code{firm_core} returns a function.
-#'     \item \code{firm_checks} returns a data frame with columns \code{expr}
+#'     \item \code{firm_checks} returns a data frame with components \code{expr}
 #'       (language), \code{env} (environment), \code{string} (character),
 #'       \code{msg} (character).
+#'     \item \code{firm_error} returns a character vector.
 #'     \item \code{firm_args} returns a character vector.
 #'   }
 #'   In the absence of the component to be extracted, these functions return
@@ -29,7 +32,8 @@
 #' f_fm <- firmly(f, ~is.numeric, list(~x, ~y - x) ~ {. > 0})
 #'
 #' identical(firm_core(f_fm), f)                  # [1] TRUE
-#' firm_checks(f_fm)                              # 4 x 4 data frame (tibble)
+#' firm_checks(f_fm)                              # 4 x 4 data frame
+#' firm_error(f_fm)                               # [1] "simpleError"
 #' firm_args(f_fm)                                # NULL
 #' firm_args(firmly(f_fm, .warn_missing = "y"))   # [1] "y"
 #'
@@ -39,17 +43,23 @@ NULL
 #' @rdname components
 #' @export
 firm_core <- function(x) {
-  environment(environment(x)$.fn)$.f
+  .subset2(environment(x), ".fn")
 }
 
 #' @rdname components
 #' @export
 firm_checks <- function(x) {
-  environment(x)$.chks
+  .subset2(environment(x), ".chks")
+}
+
+#' @rdname components
+#' @export
+firm_error <- function(x) {
+  .subset2(environment(x), ".error_class")
 }
 
 #' @rdname components
 #' @export
 firm_args <- function(x) {
-  environment(environment(x)$.warn)$.args
+  .subset2(environment(.subset2(environment(x), ".warn")), ".args")
 }
