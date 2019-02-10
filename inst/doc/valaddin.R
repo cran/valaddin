@@ -24,7 +24,7 @@ d <- as.POSIXct("2017-01-01 09:30:00")
 as.POSIXlt(d, tz = "EST")$hour
 
 ## ---- include = FALSE----------------------------------------------------
-if (is.na(tz_original)) {
+if (isTRUE(is.na(tz_original))) {
   Sys.unsetenv("TZ")
 } else {
   Sys.setenv(TZ = tz_original)

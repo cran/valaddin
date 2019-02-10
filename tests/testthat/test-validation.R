@@ -58,12 +58,12 @@ test_that("one-sided formula produces global check", {
   })
   for (i in seq_along(arg_list)) {
     for (arg in nms[1:i]) {
-      expect_error(purrr::lift(f_pos)(arg_list[[i]]),
+      expect_error(lift(f_pos)(arg_list[[i]]),
                    sprintf("FALSE[^\n]*?\\(%s\\)", arg))
     }
     # No other errors
-    expect_equal(purrr::lift(purrr::safely(f_pos))(arg_list[[i]]) %>% {
-      str_count(.$error, "FALSE")
+    expect_equal(lift(safely(f_pos))(arg_list[[i]]) %>% {
+      str_count(as.character(.$error), "FALSE")
     }, i)
   }
 
@@ -106,7 +106,7 @@ test_that("string formula produces global check with message", {
   })
   for (i in seq_along(arg_list)) {
     for (arg in nms[1:i]) {
-      expect_error(purrr::lift(f_pos)(arg_list[[i]]),
+      expect_error(lift(f_pos)(arg_list[[i]]),
                    sprintf("Not positive: `%s`", arg))
     }
     # No other errors
@@ -189,7 +189,7 @@ test_that("predicate function of list-argument applies to argument lists", {
   chklist <- list(
     ~is.numeric,
     list(not_gt("y", "x") ~ list(x, y), not_gt("z", "y") ~ list(y, z)) ~
-      purrr::lift(function(a, b) b - a > 0)
+      lift(function(a, b) b - a > 0)
   )
   f_firm <- firmly(f, .checklist = chklist)
 
@@ -224,7 +224,7 @@ test_that("invalid predicate value flagged by precise error of such", {
   f <- function(x) fncmsg
   is_long_lgl <- function(x) is.logical(x) && (length(x) >= 2L)
   is_numeric_faulty <- function(x) {
-    if (is.null(x) || is.na(x) || identical(x, logical(0)) || is_long_lgl(x)) {
+    if (is.null(x) || isTRUE(is.na(x)) || identical(x, logical(0)) || is_long_lgl(x)) {
       x
     } else {
       is.numeric(x)
@@ -402,7 +402,7 @@ test_that("formal arguments don't override names in validation procedure", {
   f <- function() {
     # Ensure that no arguments have are logical (thus are coercible to numeric)
     args <- as.list(match.call()[-1])
-    stopifnot(vapply(args, Negate(is.logical), logical(1)))
+    stopifnot(map_lgl(args, Negate(is.logical)))
     eval(sum_args)
   }
 

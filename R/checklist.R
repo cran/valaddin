@@ -37,17 +37,16 @@ is_checklist <- function(x) {
   is.list(x) && all(vapply(x, is_check_formula, logical(1)))
 }
 
-# Same as purrr::is_scalar_character() but with check against NA
 is_string <- function(x) {
-  typeof(x) == "character" && length(x) == 1L && !is.na(x)
+  typeof(x) == "character" && length(x) == 1L && !isTRUE(is.na(x))
 }
 
 is_gbl_check_formula <- function(x) {
-  inherits(x, "formula") && is_rhs_function(x) && is_string(ff_eval_lhs(x))
+  inherits(x, "formula") && is_rhs_function(x) && is_string(f_eval_lhs(x))
 }
 
 is_rhs_function <- function(x) {
-  is_lambda(lazyeval::f_rhs(x)) || is.function(ff_eval_rhs(x))
+  is_lambda(lazyeval::f_rhs(x)) || is.function(f_eval_rhs(x))
 }
 
 # Like magrittr, capture '{...}' as anonymous function
@@ -56,7 +55,7 @@ is_lambda <- function(x) {
 }
 
 # To check that a formula is onesided, it is not enough to check
-# is.null(ff_eval_lhs(x)), for both NULL ~ x and ~x have NULL lhs.
+# is.null(f_eval_lhs(x)), for both NULL ~ x and ~x have NULL lhs.
 is_onesided <- function(x) {
   length(x) == 2L
 }
@@ -67,13 +66,13 @@ is_f_onesided <- function(x) {
 
 is_lhs_checkitem <- function(x) {
   is_onesided(x) || {
-    lhs <- ff_eval_lhs(x)
+    lhs <- f_eval_lhs(x)
     is_string(lhs) || is_flist(lhs)
   }
 }
 
 is_check_expr <- function(x) {
-  inherits(x, "formula") && (is_onesided(x) || is_string(ff_eval_lhs(x)))
+  inherits(x, "formula") && (is_onesided(x) || is_string(f_eval_lhs(x)))
 }
 
 is_flist <- function(x) {

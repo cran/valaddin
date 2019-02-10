@@ -2,7 +2,7 @@
 
 # Make a list of check items
 unfurl <- function(.symb, .nm, .msg, .env) {
-  chk_items <- lapply(.symb, ff_new, env = .env)
+  chk_items <- lapply(.symb, lazyeval::f_new, env = .env)
   if (is.null(.msg)) {
     names(chk_items) <- character(length(chk_items))
   } else {
@@ -31,7 +31,7 @@ assemble <- function(.chk, .nm, .symb, .env = lazyeval::f_env(.chk)) {
   p_expr <- if (is_lambda(p)) express_lambda(p) else p
   predicate <- eval(p_expr, .env)
 
-  lhs <- ff_eval_lhs(.chk)
+  lhs <- f_eval_lhs(.chk)
   chk_items <- if (is.list(lhs)) {
     # .chk: local scope
     do.call(lazyeval::f_list, lhs)
@@ -497,8 +497,7 @@ print.firm_closure <- function(x, ...) {
 #'       \code{\link{localize}}.
 #'     \item Pre-made check-formula generators are provided to facilitate
 #'       argument checks for \link[=type-checkers]{types},
-#'       \link[=bare-type-checkers]{bare types},
-#'       \link[=scalar-type-checkers]{scalar types}, and
+#'       \link[=scalar-checkers]{scalar objects}, and
 #'       \link[=misc-checkers]{other} common data structures and input
 #'       assumptions. These functions are prefixed by \code{vld_}, for
 #'       convenient browsing and look-up in editors and IDE's that support name

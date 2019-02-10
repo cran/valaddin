@@ -9,9 +9,9 @@
 #'   Formulae} section of \link{firmly}.
 #'
 #'   Ready-made checkers for \link[=type-checkers]{types},
-#'   \link[=bare-type-checkers]{bare types}, \link[=scalar-type-checkers]{scalar
-#'   types}, and \link[=misc-checkers]{miscellaneous predicates} are provided as
-#'   a convenience, and as a model for creating families of check makers.
+#'   \link[=scalar-checkers]{scalar objects}, and
+#'   \link[=misc-checkers]{miscellaneous predicates} are provided as a
+#'   convenience, and as a model for creating families of check makers.
 #' @examples
 #' chk_pos_gbl <- "Not positive" ~ {. > 0}
 #' chk_pos_lcl <- localize(chk_pos_gbl)
@@ -88,7 +88,7 @@ localize <- list(
     is_gbl_check_formula
 ) %checkin%
   function(chk) {
-    .msg <- ff_eval_lhs(chk)
+    .msg <- f_eval_lhs(chk)
     .rhs <- lazyeval::f_rhs(chk)
     .env <- lazyeval::f_env(chk)
 
@@ -106,12 +106,11 @@ localize <- list(
 
       wo_msg <- vapply(fs, is_onesided, logical(1))
       fs[wo_msg] <- lapply(fs[wo_msg], function(f) {
-        ff_lhs(f) <- paste(.msg, deparse_collapse(lazyeval::f_rhs(f)), sep = ": ")
+        lazyeval::f_lhs(f) <- paste(.msg, deparse_collapse(lazyeval::f_rhs(f)), sep = ": ")
         f
       })
 
-      # Cannot use lazyeval::f_new (<= 0.2.0) because lhs is not a language object
-      ff_new(.rhs, fs, .env)
+      lazyeval::f_new(.rhs, fs, .env)
     }
 
     structure(chkr, class = c("check_maker", class(chkr)))
