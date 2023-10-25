@@ -5,13 +5,13 @@
 
 # valaddin
 
-[![Build
-Status](https://travis-ci.org/egnha/valaddin.svg?branch=1.0.0)](https://travis-ci.org/egnha/valaddin)
-[![codecov](https://codecov.io/gh/egnha/valaddin/branch/1.0.0/graph/badge.svg)](https://codecov.io/gh/egnha/valaddin/branch/1.0.0)
-[![CRAN\_Status\_Badge](https://www.r-pkg.org/badges/version/valaddin)](https://cran.r-project.org/package=valaddin)
+<!-- badges: start -->
+
+[![R-CMD-check](https://github.com/egnha/valaddin/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/egnha/valaddin/actions/workflows/R-CMD-check.yaml)
+[![CRAN_Status_Badge](https://www.r-pkg.org/badges/version/valaddin)](https://cran.r-project.org/package=valaddin)
 [![stability-frozen](https://img.shields.io/badge/stability-frozen-blue.svg)](https://github.com/emersion/stability-badges#frozen)
-[![License:
-MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+<!-- badges: end -->
 
 Dealing with invalid function inputs is a chronic pain for R users,
 given R’s weakly typed nature. *valaddin* provides pain relief—a
@@ -73,15 +73,15 @@ secant_numeric(log, "1", ".1")
 
 While this works, it’s not ideal, even in this simple situation, because
 
--   it’s inconvenient for interactive use at the console: you have to
-    declare a new function, and give it a new name (or copy-paste the
-    original function body)
+- it’s inconvenient for interactive use at the console: you have to
+  declare a new function, and give it a new name (or copy-paste the
+  original function body)
 
--   it doesn’t catch all errors, only the first that occurs among the
-    checks
+- it doesn’t catch all errors, only the first that occurs among the
+  checks
 
--   you’re back to square one, if you later realize you need additional
-    checks, or want to skip them altogether.
+- you’re back to square one, if you later realize you need additional
+  checks, or want to skip them altogether.
 
 ### valaddin rectifies these shortcomings
 
@@ -214,81 +214,69 @@ bc_tri(.5, .6)
 #> (x, y) not in triangle
 ```
 
-Alternatively, use the `lift()` function from the
-[purrr](https://github.com/tidyverse/purrr) package:
-
-``` r
-bc_tri <- firmly(bc, list(outside ~ list(x, y)) ~  purrr::lift(in_triangle))
-```
-
 ### Make your code more intelligible
 
 To make your functions more intelligible, declare your input assumptions
 and move the core logic to the fore. You can do this using `firmly()`,
 in several ways:
 
--   Precede the function header with input checks, by explicitly
-    assigning the function to `firmly()`’s `.f` argument:
+- Precede the function header with input checks, by explicitly assigning
+  the function to `firmly()`’s `.f` argument:
 
-    ``` r
-    bc <- firmly(
-      ~is.numeric,
-      ~{length(.) == 1L},
-      vld_true(outside ~ in_triangle(x, y)),
-      .f = function(x, y) {
-        c(x, y, 1 - x - y)
-      }
-    )
+  ``` r
+  bc <- firmly(
+    ~is.numeric,
+    ~{length(.) == 1L},
+    vld_true(outside ~ in_triangle(x, y)),
+    .f = function(x, y) {
+      c(x, y, 1 - x - y)
+    }
+  )
 
-    bc(.5, .2)
-    #> [1] 0.5 0.2 0.3
+  bc(.5, .2)
+  #> [1] 0.5 0.2 0.3
 
-    bc(.5, c(.2, .1))
-    #> Error: bc(x = 0.5, y = c(0.2, 0.1))
-    #> FALSE: (function(.) {length(.) == 1L})(y)
+  bc(.5, c(.2, .1))
+  #> Error: bc(x = 0.5, y = c(0.2, 0.1))
+  #> 1) FALSE: (function(.) {length(.) == 1L})(y)
+  #> 2) Error evaluating check (function (x) is.logical(x) && length(x) == 1L && !is.na(x) && x)(in_triangle(x, y)): 'length = 2' in coercion to 'logical(1)'
 
-    bc(".5", 1)
-    #> Error: bc(x = ".5", y = 1)
-    #> 1) FALSE: is.numeric(x)
-    #> 2) (x, y) not in triangle
-    ```
+  bc(".5", 1)
+  #> Error: bc(x = ".5", y = 1)
+  #> 1) FALSE: is.numeric(x)
+  #> 2) (x, y) not in triangle
+  ```
 
--   Use the [magrittr](https://github.com/tidyverse/magrittr) `%>%`
-    operator to deliver input checks, by capturing them as a list with
-    `firmly()`’s `.checklist` argument:
+- Use the [magrittr](https://github.com/tidyverse/magrittr) `%>%`
+  operator to deliver input checks, by capturing them as a list with
+  `firmly()`’s `.checklist` argument:
 
-    ``` r
-    library(magrittr)
+  ``` r
+  library(magrittr)
 
-    bc2 <- list(
-      ~is.numeric,
-      ~{length(.) == 1L},
-      vld_true(outside ~ in_triangle(x, y))
-    ) %>%
-      firmly(function(x, y) {
-        c(x, y, 1 - x - y)
-      },
-      .checklist = .)
+  bc2 <- list(
+    ~is.numeric,
+    ~{length(.) == 1L},
+    vld_true(outside ~ in_triangle(x, y))
+  ) %>%
+    firmly(function(x, y) {
+      c(x, y, 1 - x - y)
+    },
+    .checklist = .)
+  ```
 
-    all.equal(bc, bc2)
-    #> [1] TRUE
-    ```
+- Better yet, use the `%checkin%` operator:
 
--   Better yet, use the `%checkin%` operator:
-
-    ``` r
-    bc3 <- list(
-      ~is.numeric,
-      ~{length(.) == 1L},
-      vld_true(outside ~ in_triangle(x, y))
-    ) %checkin%
-      function(x, y) {
-        c(x, y, 1 - x - y)
-      }
-
-    all.equal(bc, bc3)
-    #> [1] TRUE
-    ```
+  ``` r
+  bc3 <- list(
+    ~is.numeric,
+    ~{length(.) == 1L},
+    vld_true(outside ~ in_triangle(x, y))
+  ) %checkin%
+    function(x, y) {
+      c(x, y, 1 - x - y)
+    }
+  ```
 
 ### Learn more
 
@@ -300,31 +288,31 @@ for an overview of use cases.
 
 ## Related packages
 
--   [assertive](https://bitbucket.org/richierocks/assertive),
-    [assertthat](https://github.com/hadley/assertthat), and
-    [checkmate](https://github.com/mllg/checkmate) provide handy
-    collections of predicate functions that you can use in conjunction
-    with `firmly()`.
+- [assertive](https://bitbucket.org/richierocks/assertive),
+  [assertthat](https://github.com/hadley/assertthat), and
+  [checkmate](https://github.com/mllg/checkmate) provide handy
+  collections of predicate functions that you can use in conjunction
+  with `firmly()`.
 
--   [argufy](https://github.com/gaborcsardi/argufy) takes a different
-    approach to input validation, using
-    [roxygen](https://github.com/r-lib/roxygen2) comments to specify
-    checks.
+- [argufy](https://github.com/gaborcsardi/argufy) takes a different
+  approach to input validation, using
+  [roxygen](https://github.com/r-lib/roxygen2) comments to specify
+  checks.
 
--   [ensurer](https://github.com/smbache/ensurer) and
-    [assertr](https://github.com/ropensci/assertr) provide a means of
-    validating function values. Additionally, ensurer provides an
-    experimental replacement for `function()` that builds functions with
-    type-validated arguments.
+- [ensurer](https://github.com/smbache/ensurer) and
+  [assertr](https://github.com/ropensci/assertr) provide a means of
+  validating function values. Additionally, ensurer provides an
+  experimental replacement for `function()` that builds functions with
+  type-validated arguments.
 
--   [typeCheck](https://github.com/jimhester/typeCheck), together with
-    [Types for R](https://github.com/jimhester/types), enables the
-    creation of functions with type-validated arguments by means of
-    special type annotations. This approach is orthogonal to that of
-    valaddin: whereas valaddin specifies input checks as *predicate
-    functions with scope*, typeCheck specifies input checks as
-    *arguments with type*.
+- [typeCheck](https://github.com/jimhester/typeCheck), together with
+  [Types for R](https://github.com/jimhester/types), enables the
+  creation of functions with type-validated arguments by means of
+  special type annotations. This approach is orthogonal to that of
+  valaddin: whereas valaddin specifies input checks as *predicate
+  functions with scope*, typeCheck specifies input checks as *arguments
+  with type*.
 
 ## License
 
-MIT Copyright © 2021 [Eugene Ha](https://github.com/egnha)
+MIT Copyright © 2016–2023 [Eugene Ha](https://github.com/egnha)
